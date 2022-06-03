@@ -1,0 +1,11 @@
+../Core/Src/main.c:112:5:main	40	static
+../Core/Src/main.c:192:6:SystemClock_Config	88	static
+../Core/Src/main.c:227:13:MX_CAN_Init	8	static
+../Core/Src/main.c:272:13:MX_SPI1_Init	8	static
+../Core/Src/main.c:312:13:MX_GPIO_Init	48	static
+../Core/Src/main.c:355:10:getRawRotation	16	static
+../Core/Src/main.c:364:10:sendCAN	64	static
+../Core/Src/main.c:394:10:getRX0Count	8	static
+../Core/Src/main.c:398:10:getRX1Count	8	static
+../Core/Src/main.c:402:6:readCAN	80	static
+../Core/Src/main.c:423:6:Error_Handler	8	static,ignoring_inline_asm
