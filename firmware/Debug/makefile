@@ -79,8 +79,8 @@ all: main-build
 main-build: micro_sas.elf secondary-outputs
 
 # Tool invocations
-micro_sas.elf micro_sas.map: $(OBJS) $(USER_OBJS) /home/jflorchi/STM32CubeIDE/workspace/micro_sas/STM32F042F4PX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-g++ -o "micro_sas.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m0 -T"/home/jflorchi/STM32CubeIDE/workspace/micro_sas/STM32F042F4PX_FLASH.ld" --specs=nosys.specs -Wl,-Map="micro_sas.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -lstdc++ -lsupc++ -Wl,--end-group
+micro_sas.elf micro_sas.map: $(OBJS) $(USER_OBJS) /home/jflorchi/STM32CubeIDE/workspace/micro_sas/firmware/STM32F042F4PX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-g++ -o "micro_sas.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m0 -T"/home/jflorchi/STM32CubeIDE/workspace/micro_sas/firmware/STM32F042F4PX_FLASH.ld" --specs=nosys.specs -Wl,-Map="micro_sas.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -lstdc++ -lsupc++ -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 

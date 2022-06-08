@@ -87,11 +87,8 @@ CAN_RxHeaderTypeDef   rxHeader;
 uint8_t               rxBuffer[8];
 uint32_t              txMailbox;
 
-uint16_t zeroPos = 0;
-uint32_t currentAngle = 0;
-uint32_t lastAngle = 0;
-uint8_t isNegative = 0;
-uint8_t on = 0;
+int angle = 0;
+int lastAngle = 0;
 
 uint16_t SPI_TX_DATA[4] = {__Read_Clear_Error_Flag, __Read_NOP, __Read_Angle, __Read_NOP};
 uint16_t SPI_RX_DATA[4] = {0};
@@ -143,7 +140,8 @@ int main(void)
 	  LED_ON();
   }
 
-  zeroPos = getRawRotation();
+  angle = 0;
+  lastAngle = getRawRotation();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -152,24 +150,19 @@ int main(void)
 	  readCAN();
 
 	  uint16_t rawAngle = getRawRotation();
-	  int angleDelta = ABS(rawAngle - lastAngle);
-	  if (angleDelta > 10000) { // wrapped around
-		  // steering wheel turning right = rawAngle decreasing due to my mount
-		  if (rawAngle > lastAngle) { // turning right
-			  currentAngle -= 16383;
-		  } else {
-			  currentAngle += 16383;
-		  }
-	  }
-	  int computedAngle = rawAngle + currentAngle - zeroPos;
-	  if (computedAngle > 49149 || computedAngle < -49149) { // check sane (3 full rotations)
+	  int angleDelta = rawAngle - lastAngle;
+	  angleDelta = (angleDelta + 24576) % 16384 - 8192;
+
+	  angle += angleDelta;
+
+	  if (angle > 49149 || angle < -49149) { // check sane (3 full rotations)
 		  SET_ERROR(2);
 	  } else {
 		  CLEAR_ERROR(2);
 	  }
 
-	  uint8_t txBuffer[] = {(computedAngle >> 24) & 0xFF,
-			  (computedAngle >> 16) & 0xFF, (computedAngle >> 8) & 0xFF, computedAngle & 0xFF,
+	  uint8_t txBuffer[] = {(angle >> 24) & 0xFF,
+			  (angle >> 16) & 0xFF, (angle >> 8) & 0xFF, angle & 0xFF,
 			  0x00, 0x00, (rawAngle & 0xFF00) >> 8, rawAngle & 0x00FF};
 	  sendCAN(0x23, txBuffer, 8); // steering angle message
 
