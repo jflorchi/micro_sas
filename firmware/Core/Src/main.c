@@ -53,8 +53,7 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
- CAN_HandleTypeDef hcan;
-
+CAN_HandleTypeDef hcan;
 SPI_HandleTypeDef hspi1;
 
 /* USER CODE BEGIN PV */
@@ -73,6 +72,7 @@ uint32_t sendCAN(uint16_t id, uint8_t buffer[], uint8_t len);
 uint32_t getRX0Count();
 uint32_t getRX1Count();
 void readCAN();
+uint8_t isDeadFace(uint8_t buf[], uint8_t len);
 
 /* USER CODE END PFP */
 
@@ -80,15 +80,23 @@ void readCAN();
 /* USER CODE BEGIN 0 */
 uint8_t errors = 0;
 
-
 CAN_FilterTypeDef     canfil;
 CAN_TxHeaderTypeDef   txHeader;
 CAN_RxHeaderTypeDef   rxHeader;
 uint8_t               rxBuffer[8];
 uint32_t              txMailbox;
 
+uint8_t ignition = 0;
+uint32_t lastSeen = 0;
+
 int angle = 0;
 int lastAngle = 0;
+
+uint32_t counter = 0;
+uint8_t readIndex = 0;
+int readings[10];
+int total;
+int average;
 
 uint16_t SPI_TX_DATA[4] = {__Read_Clear_Error_Flag, __Read_NOP, __Read_Angle, __Read_NOP};
 uint16_t SPI_RX_DATA[4] = {0};
@@ -148,6 +156,9 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1) {
 	  readCAN();
+	  if (HAL_GetTick() - lastSeen > 750) {
+		  ignition = 0;
+	  }
 
 	  uint16_t rawAngle = getRawRotation();
 	  int angleDelta = rawAngle - lastAngle;
@@ -161,16 +172,37 @@ int main(void)
 		  CLEAR_ERROR(2);
 	  }
 
-	  uint8_t txBuffer[] = {(angle >> 24) & 0xFF,
-			  (angle >> 16) & 0xFF, (angle >> 8) & 0xFF, angle & 0xFF,
-			  0x00, 0x00, (rawAngle & 0xFF00) >> 8, rawAngle & 0x00FF};
-	  sendCAN(0x23, txBuffer, 8); // steering angle message
+	  total -= readings[readIndex];
+	  readings[readIndex] = angle;
+	  total += readings[readIndex++];
+	  if (readIndex >= 10) {
+	    readIndex = 0;
+	  }
 
-	  uint8_t errBuffer[1] = {errors};
-	  sendCAN(0x699, errBuffer, 1); // error flags
+	  if (ignition == 1) {
+		  LED_ON();
+		  if (counter % 10 == 0) {
+			  int raw = total / 10;
+			  uint8_t txBuffer[] = {(raw >> 24) & 0xFF, (raw >> 16) & 0xFF,
+					  	  	  	  	  (raw >> 8) & 0xFF, raw & 0xFF,
+									  0x00, 0x00, 0x00, 0x00};
+			  sendCAN(0x23, txBuffer, 8); // steering angle message
+		  }
 
-	  lastAngle = rawAngle;
-	  HAL_Delay(10);
+		  if (counter == 100) {
+			  uint8_t errBuffer[1] = {errors};
+			  sendCAN(0x231, errBuffer, 1); // error flags
+			  counter = 0;
+		  }
+
+		  lastAngle = rawAngle;
+		  counter++;
+		  HAL_Delay(1);
+	  } else {
+		  LED_OFF();
+		  HAL_Delay(500);
+	  }
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -369,15 +401,12 @@ uint32_t sendCAN(uint16_t id, uint8_t buffer[], uint8_t len) {
 		uint8_t res = HAL_CAN_AddTxMessage(&hcan, &header, buffer, &mailbox);
 		if (res != HAL_OK) {
 			SET_ERROR(0);
-			LED_ON();
 		} else {
 			CLEAR_ERROR(0);
-			LED_OFF();
 		}
 	} else {
 		if (HAL_CAN_IsTxMessagePending(&hcan, txMailbox)) {
 			SET_ERROR(1);
-			LED_ON();
 		}
 	}
 
@@ -397,12 +426,34 @@ void readCAN() {
 		CAN_RxHeaderTypeDef tmp;
 		uint8_t data[8];
 		HAL_CAN_GetRxMessage(&hcan, CAN_RX_FIFO0, &tmp, data);
+		if (tmp.StdId == 0x230 && isDeadFace(data, tmp.DLC)) {
+			angle = 0;
+		}
+		if (tmp.StdId == 0x1) {
+			ignition = 1;
+			lastSeen = HAL_GetTick();
+		}
 	}
 	if (getRX1Count() > 0) {
 		CAN_RxHeaderTypeDef tmp;
 		uint8_t data[8];
 		HAL_CAN_GetRxMessage(&hcan, CAN_RX_FIFO0, &tmp, data);
+		if (tmp.StdId == 0x230 && isDeadFace(data, tmp.DLC)) {
+			angle = 0;
+		}
+		if (tmp.StdId == 0x1) {
+			ignition = 1;
+			lastSeen = HAL_GetTick();
+		}
 	}
+}
+
+uint8_t isDeadFace(uint8_t buf[], uint8_t len) {
+	if (len != 8) {
+		return 0;
+	}
+	return buf[0] = 0xD && buf[1] == 0xE && buf[2] == 0xA && buf[3] ==0xD
+			&& buf[4] == 0xF && buf[5] == 0xA && buf[6] == 0xC && buf[7] == 0xE;
 }
 
 
