@@ -30,8 +30,8 @@
 #define LED_OFF() HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_RESET)
 #define LED_ON() HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET)
 
-#define SET_ERROR(n) errors |= 1UL << n;
-#define CLEAR_ERROR(n) errors &= ~(1UL << n);
+#define SET_ERROR(n) errors |= 1UL << n
+#define CLEAR_ERROR(n) errors &= ~(1UL << n)
 
 #define ABS(x) ((x) > 0 ? (x) : -(x))
 
@@ -53,7 +53,8 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-CAN_HandleTypeDef hcan;
+ CAN_HandleTypeDef hcan;
+
 SPI_HandleTypeDef hspi1;
 
 /* USER CODE BEGIN PV */
@@ -69,9 +70,9 @@ static void MX_CAN_Init(void);
 
 uint16_t getRawRotation(void);
 uint32_t sendCAN(uint16_t id, uint8_t buffer[], uint8_t len);
-uint32_t getRX0Count();
-uint32_t getRX1Count();
-void readCAN();
+void processCAN(CAN_HandleTypeDef *hcan, uint32_t mailbox);
+int getChecksum(uint8_t *msg, uint8_t len, uint16_t addr);
+void attachChecksum(uint16_t id, uint8_t len, uint8_t *msg);
 uint8_t isDeadFace(uint8_t buf[], uint8_t len);
 
 /* USER CODE END PFP */
@@ -81,30 +82,29 @@ uint8_t isDeadFace(uint8_t buf[], uint8_t len);
 uint8_t errors = 0;
 
 CAN_FilterTypeDef     canfil;
-CAN_TxHeaderTypeDef   txHeader;
 CAN_RxHeaderTypeDef   rxHeader;
 uint8_t               rxBuffer[8];
-uint32_t              txMailbox;
+CAN_TxHeaderTypeDef txHeader;
+uint32_t  txMailbox;
 
 uint8_t ignition = 0;
 uint32_t lastSeen = 0;
 
-int angle = 0;
-int lastAngle = 0;
+uint16_t current_position;
+uint16_t last_position;
+int16_t position_movement;
+int32_t rotational_position;
+uint16_t bitshift_cur_pos;
+uint16_t bitshift_last_pos;
+int16_t bitshift_pos_delta;
 
-uint32_t counter = 0;
-uint8_t readIndex = 0;
-int readings[10];
-int total;
-int average;
+uint16_t counter = 0;
 
 uint16_t SPI_TX_DATA[4] = {__Read_Clear_Error_Flag, __Read_NOP, __Read_Angle, __Read_NOP};
 uint16_t SPI_RX_DATA[4] = {0};
-
 const uint8_t op_num = 4;
 uint16_t origin_value = 0;
 uint8_t i;
-
 uint8_t TXD[4] = {0x55, 0xAA, 0x00, 0x00};
 uint16_t post_process_value = 0;
 
@@ -147,42 +147,39 @@ int main(void)
   if (HAL_CAN_Start(&hcan) != HAL_OK) {
 	  LED_ON();
   }
+  HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING);
+  HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO1_MSG_PENDING);
 
-  angle = 0;
-  lastAngle = getRawRotation();
+  current_position = getRawRotation();
+  last_position = current_position;
+  rotational_position = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1) {
-	  readCAN();
-	  if (HAL_GetTick() - lastSeen > 750) {
+	  if (HAL_GetTick() - lastSeen > 500) {
 		  ignition = 0;
 	  }
 
-	  uint16_t rawAngle = getRawRotation();
-	  int angleDelta = rawAngle - lastAngle;
-	  angleDelta = (angleDelta + 24576) % 16384 - 8192;
+	  current_position = getRawRotation();
+	  bitshift_cur_pos = current_position << 2;
+	  bitshift_last_pos = last_position << 2;
+	  bitshift_pos_delta = (bitshift_cur_pos - bitshift_last_pos); // Calculate the encoder "ticks" moved since the last reading - in bitshift math
+	  position_movement = bitshift_pos_delta >> 2; // Calculate the encoder "ticks" moved since the last reading - converting bitshift math
+	  rotational_position += position_movement; // Update the absolute position values.
+	  last_position = current_position;
 
-	  angle += angleDelta;
-
-	  if (angle > 49149 || angle < -49149) { // check sane (3 full rotations)
+	  if (rotational_position > 49149 || rotational_position < -49149) { // check sane (3 full rotations)
 		  SET_ERROR(2);
 	  } else {
 		  CLEAR_ERROR(2);
 	  }
 
-	  total -= readings[readIndex];
-	  readings[readIndex] = angle;
-	  total += readings[readIndex++];
-	  if (readIndex >= 10) {
-	    readIndex = 0;
-	  }
-
 	  if (ignition == 1) {
 		  LED_ON();
 		  if (counter % 10 == 0) {
-			  int raw = total / 10;
+			  int raw = rotational_position;
 			  uint8_t txBuffer[] = {(raw >> 24) & 0xFF, (raw >> 16) & 0xFF,
 					  	  	  	  	  (raw >> 8) & 0xFF, raw & 0xFF,
 									  0x00, 0x00, 0x00, 0x00};
@@ -195,7 +192,6 @@ int main(void)
 			  counter = 0;
 		  }
 
-		  lastAngle = rawAngle;
 		  counter++;
 		  HAL_Delay(1);
 	  } else {
@@ -276,12 +272,12 @@ static void MX_CAN_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN CAN_Init 2 */
-  canfil.FilterMode = CAN_FILTERMODE_IDMASK;
-  canfil.FilterScale = CAN_FILTERSCALE_32BIT;
-  canfil.FilterIdHigh = 0x0000;
-  canfil.FilterIdLow = 0x0000;
-  canfil.FilterMaskIdHigh = 0x0000;
-  canfil.FilterMaskIdLow = 0x0000;
+  canfil.FilterMode = CAN_FILTERMODE_IDLIST;
+  canfil.FilterScale = CAN_FILTERSCALE_16BIT;
+  canfil.FilterIdHigh = 0x1 << 5;
+  canfil.FilterIdLow =  0x230 << 5;
+  canfil.FilterMaskIdHigh = 0x1 << 5;
+  canfil.FilterMaskIdLow = 0x230 << 5;
   canfil.FilterFIFOAssignment = 0;
   canfil.FilterActivation = ENABLE;
   HAL_CAN_ConfigFilter(&hcan, &canfil);
@@ -380,7 +376,7 @@ static void MX_GPIO_Init(void)
 uint16_t getRawRotation() {
 	for (i = 0; i < op_num; i++) {
 		__AS5048A2_CS_ENABLE();
-		HAL_SPI_TransmitReceive(&hspi1, &SPI_TX_DATA[i], (uint8_t*) &SPI_RX_DATA[i], 1, 2710);
+		HAL_SPI_TransmitReceive(&hspi1, (uint8_t*) &SPI_TX_DATA[i], (uint8_t*) &SPI_RX_DATA[i], 1, 2710);
 		__AS5048A2_CS_DISABLE();
 	}
 	return SPI_RX_DATA[3] & 0x3fff;
@@ -413,39 +409,34 @@ uint32_t sendCAN(uint16_t id, uint8_t buffer[], uint8_t len) {
 	return mailbox;
 }
 
-uint32_t getRX0Count() {
-	return HAL_CAN_GetRxFifoFillLevel(&hcan, CAN_RX_FIFO0);
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
+	processCAN(hcan, CAN_RX_FIFO0);
 }
 
-uint32_t getRX1Count() {
-	return HAL_CAN_GetRxFifoFillLevel(&hcan, CAN_RX_FIFO1);
+void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan) {
+	processCAN(hcan, CAN_RX_FIFO1);
 }
 
-void readCAN() {
-	if (getRX0Count() > 0) {
-		CAN_RxHeaderTypeDef tmp;
-		uint8_t data[8];
-		HAL_CAN_GetRxMessage(&hcan, CAN_RX_FIFO0, &tmp, data);
-		if (tmp.StdId == 0x230 && isDeadFace(data, tmp.DLC)) {
-			angle = 0;
-		}
-		if (tmp.StdId == 0x1) {
-			ignition = 1;
-			lastSeen = HAL_GetTick();
-		}
+void processCAN(CAN_HandleTypeDef *hcan, uint32_t mailbox) {
+	CAN_RxHeaderTypeDef tmp;
+	uint8_t data[8];
+	HAL_CAN_GetRxMessage(hcan, mailbox, &tmp, data);
+	if (tmp.StdId == 0x230 && isDeadFace(data, tmp.DLC)) {
+		rotational_position = 0;
 	}
-	if (getRX1Count() > 0) {
-		CAN_RxHeaderTypeDef tmp;
-		uint8_t data[8];
-		HAL_CAN_GetRxMessage(&hcan, CAN_RX_FIFO0, &tmp, data);
-		if (tmp.StdId == 0x230 && isDeadFace(data, tmp.DLC)) {
-			angle = 0;
-		}
-		if (tmp.StdId == 0x1) {
-			ignition = 1;
-			lastSeen = HAL_GetTick();
-		}
+	if (tmp.StdId == 0x001) {
+		ignition = 1;
+		lastSeen = HAL_GetTick();
 	}
+}
+
+int getChecksum(uint8_t *msg, uint8_t len, uint16_t addr) {
+    uint8_t checksum = 0;
+    checksum = ((addr & 0xFF00) >> 8) + (addr & 0x00FF) + len + 1;
+    for (int ii = 0; ii < len; ii++) {
+        checksum += (msg[ii]);
+    }
+    return checksum;
 }
 
 uint8_t isDeadFace(uint8_t buf[], uint8_t len) {
